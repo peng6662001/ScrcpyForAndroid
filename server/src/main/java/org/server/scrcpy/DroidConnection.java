@@ -1,8 +1,6 @@
 package org.server.scrcpy;
 
 
-import android.util.Log;
-
 import org.server.scrcpy.model.ByteUtils;
 import org.server.scrcpy.model.CommandPacket;
 import org.server.scrcpy.model.ControlPacket;
@@ -12,28 +10,28 @@ import java.io.Closeable;
 import java.io.DataInputStream;
 import java.io.EOFException;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
 
 public final class DroidConnection implements Closeable {
 
+    public static final int PORT_VIDEO_CONTROL = 7007;
+    public static final int PORT_AUDIO = 7008;
 
-    private static Socket socket = null;
-    private OutputStream outputStream;
-    private DataInputStream inputStream;
+    private final Socket socket;
+    private final OutputStream outputStream;
+    private final DataInputStream inputStream;
 
     private DroidConnection(Socket socket) throws IOException {
         this.socket = socket;
-
         inputStream = new DataInputStream(socket.getInputStream());
         outputStream = socket.getOutputStream();
     }
 
 
-    private static Socket listenAndAccept() throws IOException {
-        ServerSocket serverSocket = new ServerSocket(7007);
+    private static Socket listenAndAccept(int port) throws IOException {
+        ServerSocket serverSocket = new ServerSocket(port);
         Socket sock = null;
         try {
             sock = serverSocket.accept();
@@ -44,12 +42,12 @@ public final class DroidConnection implements Closeable {
     }
 
     public static DroidConnection open(String ip) throws IOException {
+        return open(ip, PORT_VIDEO_CONTROL);
+    }
 
-        socket = listenAndAccept();
+    public static DroidConnection open(String ip, int port) throws IOException {
+        Socket socket = listenAndAccept(port);
         DroidConnection connection = null;
-//        if (socket.getInetAddress().toString().equals(ip)) {
-//            connection = new DroidConnection(socket);
-//        }
         if (!socket.getInetAddress().toString().equals(ip)) {
             Ln.w("socket connect address != " + ip);
         }
@@ -61,8 +59,14 @@ public final class DroidConnection implements Closeable {
     }
 
     public void close() throws IOException {
-        socket.shutdownInput();
-        socket.shutdownOutput();
+        try {
+            socket.shutdownInput();
+        } catch (IOException ignore) {
+        }
+        try {
+            socket.shutdownOutput();
+        } catch (IOException ignore) {
+        }
         socket.close();
     }
 
@@ -83,7 +87,7 @@ public final class DroidConnection implements Closeable {
 
         int size = ByteUtils.bytesToInt(packetSize);
 
-        if (size > 4 * 1024 * 1024) {  // 如果单个数据包大于 4m ，直接断开连接
+        if (size <= 0 || size > 4 * 1024 * 1024) {  // 如果单个数据包大于 4m ，直接断开连接
             throw new EOFException("Event controller socket closed");
         }
         byte[] packet = new byte[size];
@@ -118,4 +122,3 @@ public final class DroidConnection implements Closeable {
     }
 
 }
-

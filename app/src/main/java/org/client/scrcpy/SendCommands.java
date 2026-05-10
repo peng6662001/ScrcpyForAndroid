@@ -14,6 +14,8 @@ import java.util.concurrent.atomic.AtomicReference;
 public class SendCommands {
 
     public final static int WAIT_TIME = 5000;
+    private static final int REMOTE_VIDEO_CONTROL_PORT = 7007;
+    private static final int REMOTE_AUDIO_PORT = 7008;
 
     public enum CmdStatus {
         SUCCESS,
@@ -97,6 +99,7 @@ public class SendCommands {
     private CmdStatus startPortForward(Context context, String ip, int port, int serverport) {
         Log.i("Scrcpy", "try connect to ip: " + ip);
         AdbHelper.adbCmd(App.mContext, "connect", ip + ":" + port);
+        cleanupOldConnection(ip, port, serverport);
         // 复制server端到可执行目录
         String pushRet = AdbHelper.adbCmd(App.mContext, "-s", ip + ":" + port, "push", new File(
                 context.getExternalFilesDir("scrcpy"), "scrcpy-server.jar"
@@ -110,8 +113,17 @@ public class SendCommands {
         }
         // 开启本地端口 forward 转发
         Log.i("Scrcpy", "开启本地端口转发");
-        AdbHelper.adbCmd(App.mContext, "-s", ip + ":" + port, "forward", "tcp:" + serverport, "tcp:" + 7007);
+        AdbHelper.adbCmd(App.mContext, "-s", ip + ":" + port, "forward", "tcp:" + serverport, "tcp:" + REMOTE_VIDEO_CONTROL_PORT);
+        AdbHelper.adbCmd(App.mContext, "-s", ip + ":" + port, "forward", "tcp:" + Scrcpy.LOCAL_AUDIO_FORWARD_PORT, "tcp:" + REMOTE_AUDIO_PORT);
         return CmdStatus.SUCCESS;
+    }
+
+    private void cleanupOldConnection(String ip, int port, int localForwardPort) {
+        String serial = ip + ":" + port;
+        Log.i("Scrcpy", "清理旧连接状态");
+        AdbHelper.adbCmd(App.mContext, "-s", serial, "forward", "--remove", "tcp:" + localForwardPort);
+        AdbHelper.adbCmd(App.mContext, "-s", serial, "forward", "--remove", "tcp:" + Scrcpy.LOCAL_AUDIO_FORWARD_PORT);
+        AdbHelper.adbCmd(App.mContext, "-s", serial, "shell", "rm", "-f", "/data/local/tmp/scrcpy-server.jar");
     }
 
     private void newAdbServerStart(String[] command) {

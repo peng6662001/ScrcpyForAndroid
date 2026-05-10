@@ -1,0 +1,107 @@
+Signature-Version: 1.0
+Created-By: Android Gradle 8.0.0
+SHA-256-Digest-Manifest: LZhbvGagrRNbd8PbzbjlG0ZQMh9Xm3YnLAdgCCXBw0k=
+X-Android-APK-Signed: 2
+
+Name: AndroidManifest.xml
+SHA-256-Digest: ts0CziQ9JeVBiZeHbp7PkGDLl+EsQzvznhUoBaxx59M=
+
+Name: META-INF/com/android/build/gradle/app-metadata.properties
+SHA-256-Digest: WqvADaPJSnxnEJhizfXudaMRDHgpTR5qYETgbJspi7s=
+
+Name: assets/scrcpy-server.jar
+SHA-256-Digest: 2JeoDkFqdLQBOQZBi5S021C75obj8ibBVJ+rjFYjx1E=
+
+Name: classes.dex
+SHA-256-Digest: 5HNtCoSnx4b4aIUzhBJQ8tGhOReYLI32C9A41BdeNuA=
+
+Name: classes2.dex
+SHA-256-Digest: 9vGKAOy4OHP7dv+i+OHAn8hLj4bVEses6HjSiUoqmqE=
+
+Name: classes3.dex
+SHA-256-Digest: iv9PcoUP/y7asdD4Mj3Pp/j/6Udfh2B1TkceaTOAnkk=
+
+Name: classes4.dex
+SHA-256-Digest: tCL9jmhoTMpFskL5nVFdeHq9E9dgMdySS9iD1Ja6Rks=
+
+Name: classes5.dex
+SHA-256-Digest: dQ3MTMQQ21l4cMUFwlfx2ETIB33qXCXjAf5N/iNfnyo=
+
+Name: lib/arm64-v8a/libadb.so
+SHA-256-Digest: 4MCTYMaHGs1Uad2+OuZSL6sI76ys/30lo5iTr1DOh48=
+
+Name: lib/armeabi-v7a/libadb.so
+SHA-256-Digest: 9M+9mpqFGxWvRww/Gim6Mehi3Ca0zVIq11fkDAZyhxQ=
+
+Name: lib/x86/libadb.so
+SHA-256-Digest: daZWMrVMOBeV//61uTjarCMU6Vf9nqtK97Ue9lD5sFo=
+
+Name: lib/x86_64/libadb.so
+SHA-256-Digest: gOMNLPB7MtYKt9HJ0/MhmhbSiQvl/dI6Coy5fGTShUI=
+
+Name: res/drawable-anydpi-v24/$ic_launcher_foreground__0.xml
+SHA-256-Digest: 9DmmRnOXGwdAot8DNk0YQhRilEkg7F8Hh7YCSh/Eq+s=
+
+Name: res/drawable-anydpi-v24/ic_launcher_foreground.xml
+SHA-256-Digest: Afm67Iy5/IsVHr8dbqQhrF088Gkcgj0JpSvV5C4ImpI=
+
+Name: res/drawable/btn_click.xml
+SHA-256-Digest: OArbFrjb6noxeW/+tj65TOFm1qlqP7UXRRDVNj82H7o=
+
+Name: res/drawable/btn_global.xml
+SHA-256-Digest: vBDG1l5AG1jCNPUiFOCwx4pJGnw2iliBHK3gp6CUkps=
+
+Name: res/drawable/btn_selector.xml
+SHA-256-Digest: /7gMmnDlW3HYCpPPh3ELD78KtbCti3gsWMKMSZfvG7Q=
+
+Name: res/drawable/close.png
+SHA-256-Digest: smzizYuXZKqDVVrsZPbHQRuyxGSimKX9571WHQbdU0k=
+
+Name: res/drawable/down.png
+SHA-256-Digest: qG51ZdpKe+HfEczeP9UuWuUe8373VcKAhkf3wDjtat0=
+
+Name: res/drawable/edit_background.xml
+SHA-256-Digest: 2cXq4uHTM564Jwc8mHS2mk09WjFjRU2Mkn+sOCePllo=
+
+Name: res/drawable/ic_launcher_background.xml
+SHA-256-Digest: ukfMs34d3kA/APkrMyPnbls8jNvrfX7KIlpiM+DQq7k=
+
+Name: res/drawable/minis.png
+SHA-256-Digest: uaZtOjla26u0ek5oVuXvN0XAJ++Gg9RbEZ4qETPZ97A=
+
+Name: res/layout-land/surface.xml
+SHA-256-Digest: BbFjYj9vT3PD67G7o5MuM8wLl8qdP6lmwKQD7hR/hks=
+
+Name: res/layout-land/surface_nav.xml
+SHA-256-Digest: /WJNlmz+8BroU4AspIjeYtuQkHZZD6HEyGP5FWVSA0c=
+
+Name: res/layout-land/surface_no_nav.xml
+SHA-256-Digest: B9264nL7EGRhzwgFJh524P40mPDVuTtFjLXSqybz1gM=
+
+Name: res/layout-v22/activity_main.xml
+SHA-256-Digest: G7D4HqYQyCl9n2NIddzHvEJtEb1NOMskJBaxDwn8qcA=
+
+Name: res/layout/activity_main.xml
+SHA-256-Digest: Fqlg6k3OKzglg4gvREx3I8phIfLSqUevPIsz9dwL9zE=
+
+Name: res/layout/surface.xml
+SHA-256-Digest: au2np5NCrcc/Ry4LBReJ8KKBU79CAkUSFY2ngzv0nP4=
+
+Name: res/layout/surface_nav.xml
+SHA-256-Digest: XPtnFPapAY1+IAG7TElNeJGPI5TaLRTlZc19CsZ2hY0=
+
+Name: res/layout/surface_no_nav.xml
+SHA-256-Digest: GeqUCCBS7UuufIZi8VYMsvicqhz/Fm/Z9JA6Mi21zSc=
+
+Name: res/layout/window_display.xml
+SHA-256-Digest: HJpCnYtI8kAxWhMDlKn2+OIte4phvRuN8ObWvc+/o3I=
+
+Name: res/mipmap-xhdpi-v4/ic_launcher.png
+SHA-256-Digest: l16vpKJljmr3bebrQBN8xPrByAsjEicnW6TUUuZ6UF8=
+
+Name: res/mipmap-xhdpi-v4/ic_launcher_round.png
+SHA-256-Digest: H7b6frHgqIvpv0UwsOlpwrmr3hknKRxQOyxKjGGNyY8=
+
+Name: resources.arsc
+SHA-256-Digest: 7sjgaTivb6qWX2jJeXgYKKJk081BNUXw7HNgFmzXZ9E=
+

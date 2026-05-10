@@ -69,9 +69,13 @@ public class MainActivity extends Activity implements Scrcpy.ServiceCallbacks, S
     private boolean first_time = true;
     private boolean result_of_Rotation = false;
     private boolean serviceBound = false;
+    private static final int MAX_AUTO_RECONNECT_TIMES = 3;
+    private static final long AUTO_RECONNECT_DELAY_MS = 1200;
     // 如果 pause 切换到后台，断开后，自动重连
     // 该状态禁止保存恢复
     private boolean resumeScrcpy = false;
+    private int autoReconnectCount = 0;
+    private boolean autoReconnectInProgress = false;
     SensorManager sensorManager;
     private SendCommands sendCommands;
     private int videoBitrate;
@@ -82,6 +86,17 @@ public class MainActivity extends Activity implements Scrcpy.ServiceCallbacks, S
     private Surface surface;
     private Scrcpy scrcpy;
     private long timestamp = 0;
+    private String lastDisconnectReason = null;
+    private String lastDisconnectDetail = null;
+    private final Runnable autoReconnectRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!autoReconnectInProgress || isFinishing()) {
+                return;
+            }
+            connectScrcpyServer(PreUtils.get(context, Constant.CONTROL_REMOTE_ADDR, ""));
+        }
+    };
 
     // private byte[] fileBase64;
     private LinearLayout linearLayout;
@@ -114,7 +129,9 @@ public class MainActivity extends Activity implements Scrcpy.ServiceCallbacks, S
                             if (serviceBound) {
                                 showMainView();
                             }
-                            Toast.makeText(context, "Connection Timed out 2", Toast.LENGTH_SHORT).show();
+                            if (!scheduleAutoReconnect()) {
+                                Toast.makeText(context, "Connection Timed out 2", Toast.LENGTH_SHORT).show();
+                            }
                         } else {
                             first_time = false;
                             // 连接成功后，再把按钮显示出来
@@ -409,8 +426,15 @@ public class MainActivity extends Activity implements Scrcpy.ServiceCallbacks, S
 
         }
         if (!PreUtils.get(context, Constant.CONTROL_NO, false)) {
-            // Log.i("Screen", "setOnTouchListener: " + surfaceView.getWidth() + "x" + surfaceView.getHeight());
-            surfaceView.setOnTouchListener((view, event) -> scrcpy.touchevent(event, landscape, surfaceView.getWidth(), surfaceView.getHeight()));
+            final SurfaceView currentSurfaceView = surfaceView;
+            if (currentSurfaceView != null) {
+                currentSurfaceView.setOnTouchListener((view, event) -> {
+                    if (scrcpy == null) {
+                        return false;
+                    }
+                    return scrcpy.touchevent(event, landscape, view.getWidth(), view.getHeight());
+                });
+            }
         }
 
         if (PreUtils.get(context, Constant.CONTROL_NAV, false) &&
@@ -632,9 +656,25 @@ public class MainActivity extends Activity implements Scrcpy.ServiceCallbacks, S
     }
 
     @Override
-    public void errorDisconnect() {
-        // 必须退出
-        // 退出重连
+    public void errorDisconnect(String reason, String detail) {
+        runOnUiThread(() -> {
+            lastDisconnectReason = reason;
+            lastDisconnectDetail = detail;
+            Log.e("Scrcpy", "errorDisconnect reason=" + reason + ", detail=" + detail);
+            if (autoReconnectInProgress) {
+                return;
+            }
+            if (scheduleAutoReconnect()) {
+                return;
+            }
+            showDisconnectDialog();
+        });
+    }
+
+    private void showDisconnectDialog() {
+        if (!TextUtils.isEmpty(lastDisconnectReason)) {
+            Log.e("Scrcpy", "show disconnect dialog, last reason=" + lastDisconnectReason + ", detail=" + lastDisconnectDetail);
+        }
         Dialog.displayDialog(this, getString(R.string.disconnect),
                 getString(R.string.disconnect_ask), () -> {
                     if (serviceBound) {
@@ -644,6 +684,40 @@ public class MainActivity extends Activity implements Scrcpy.ServiceCallbacks, S
                         MainActivity.this.finish();
                     }
                 }, false);
+    }
+
+    private void resetAutoReconnectState() {
+        autoReconnectCount = 0;
+        autoReconnectInProgress = false;
+        ThreadUtils.removeCallbacks(autoReconnectRunnable);
+        lastDisconnectReason = null;
+        lastDisconnectDetail = null;
+    }
+
+    private boolean scheduleAutoReconnect() {
+        String remoteAddress = PreUtils.get(context, Constant.CONTROL_REMOTE_ADDR, "");
+        if (TextUtils.isEmpty(remoteAddress) || resumeScrcpy || result_of_Rotation) {
+            resetAutoReconnectState();
+            return false;
+        }
+        if (autoReconnectCount >= MAX_AUTO_RECONNECT_TIMES) {
+            resetAutoReconnectState();
+            return false;
+        }
+        autoReconnectInProgress = true;
+        autoReconnectCount++;
+        if (serviceBound) {
+            showMainView();
+        } else if (scrcpy != null) {
+            scrcpy.StopService();
+            scrcpy = null;
+        }
+        first_time = true;
+        Progress.showDialog(MainActivity.this, getString(R.string.please_wait));
+        Toast.makeText(context, getString(R.string.auto_reconnect_retry, autoReconnectCount, MAX_AUTO_RECONNECT_TIMES), Toast.LENGTH_SHORT).show();
+        ThreadUtils.removeCallbacks(autoReconnectRunnable);
+        ThreadUtils.postDelayed(autoReconnectRunnable, AUTO_RECONNECT_DELAY_MS);
+        return true;
     }
 
     @Override
@@ -775,12 +849,17 @@ public class MainActivity extends Activity implements Scrcpy.ServiceCallbacks, S
                         }
                     });
                 } else {
-                    ThreadUtils.post(Progress::closeDialog);
-                    Toast.makeText(context, "Network OR ADB connection failed", Toast.LENGTH_SHORT).show();
-                    connectExitExt();
+                    ThreadUtils.post(() -> {
+                        Progress.closeDialog();
+                        if (!scheduleAutoReconnect()) {
+                            Toast.makeText(context, "Network OR ADB connection failed", Toast.LENGTH_SHORT).show();
+                            connectExitExt();
+                        }
+                    });
                 }
             });
         } else {
+            resetAutoReconnectState();
             Toast.makeText(context, "Server Address Empty", Toast.LENGTH_SHORT).show();
             connectExitExt();
         }
@@ -790,6 +869,7 @@ public class MainActivity extends Activity implements Scrcpy.ServiceCallbacks, S
      * 连接成功了，而且成功的显示了画面出来
      */
     protected void connectSuccessExt() {
+        resetAutoReconnectState();
         Dialog.closeDialogs();
     }
 
@@ -806,7 +886,7 @@ public class MainActivity extends Activity implements Scrcpy.ServiceCallbacks, S
             // 警告！！！ 重启将会导致 adb 配对过程失效，从而无法连接新设备，需要更智能的重启机制
             // AdbHelper.restartAdb();
         }
-        if (headlessMode && !resumeScrcpy && !result_of_Rotation) {
+        if (headlessMode && !resumeScrcpy && !result_of_Rotation && !autoReconnectInProgress) {
             if (!userDisconnect) {
                 Dialog.displayDialog(this, getString(R.string.connect_faild),
                         getString(R.string.connect_faild_ask), () -> {

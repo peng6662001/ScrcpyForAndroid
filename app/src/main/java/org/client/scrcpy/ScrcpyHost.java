@@ -228,7 +228,8 @@ public class ScrcpyHost implements Scrcpy.ServiceCallbacks {
     }
 
     @Override
-    public void errorDisconnect() {
+    public void errorDisconnect(String reason, String detail) {
+        Log.e("Scrcpy", "ScrcpyHost disconnect reason=" + reason + ", detail=" + detail);
 
     }
 

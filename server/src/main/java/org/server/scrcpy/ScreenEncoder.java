@@ -11,7 +11,6 @@ import android.os.IBinder;
 import android.util.Log;
 import android.view.Surface;
 
-import org.server.scrcpy.audio.AudioCaptureException;
 import org.server.scrcpy.model.MediaPacket;
 import org.server.scrcpy.model.VideoPacket;
 import org.server.scrcpy.wrappers.DisplayManager;
@@ -112,29 +111,6 @@ public class ScreenEncoder implements Device.RotationListener {
         requestKeyFrame.set(true);
     }
 
-    /**
-     * 开启音频流转发
-     *
-     * @param outputStream
-     */
-    private void startAudioCapture(OutputStream outputStream) {
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                AudioEncoder audioEncoder = new AudioEncoder(128000);
-                try {
-                    audioEncoder.streamScreen(outputStream);
-                } catch (IOException e) {
-                    Ln.e("audio capture IOException", e);
-                } catch (AudioCaptureException e) {
-                    Ln.e("audio capture AudioCaptureException", e);
-                } catch (Exception e) {
-                    Ln.e("audio capture Exception", e);
-                }
-            }
-        }).start();
-    }
-
     public void streamScreen(Device device, OutputStream outputStream) throws IOException {
         // Log.d("ScreenCapture", buildDisplayListMessage());
         int[] buf = new int[]{device.getScreenInfo().getDeviceSize().getWidth(), device.getScreenInfo().getDeviceSize().getHeight()};
@@ -146,9 +122,9 @@ public class ScreenEncoder implements Device.RotationListener {
             array[j * 4 + 2] = (byte) ((c & 0xFF00) >> 8);
             array[j * 4 + 3] = (byte) (c & 0xFF);
         }
-        outputStream.write(array, 0, array.length);   // Sending device resolution
-
-        startAudioCapture(outputStream);  // start audio capture
+        synchronized (outputStream) {
+            outputStream.write(array, 0, array.length);   // Sending device resolution
+        }
 
         MediaFormat format = createFormat(bitRate, frameRate, iFrameInterval);
         device.setRotationListener(this);
@@ -264,7 +240,9 @@ public class ScreenEncoder implements Device.RotationListener {
                             flag = VideoPacket.Flag.FRAME;
                         }
                         VideoPacket packet = new VideoPacket(type, flag, bufferInfo.presentationTimeUs, b);
-                        outputStream.write(packet.toByteArray());
+                        synchronized (outputStream) {
+                            outputStream.write(packet.toByteArray());
+                        }
                     }
 
                 }

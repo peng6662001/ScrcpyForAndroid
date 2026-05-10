@@ -217,7 +217,9 @@ public class AudioEncoder {
                         }
                         AudioPacket packet = new AudioPacket(MediaPacket.Type.AUDIO, flag, bufferInfo.presentationTimeUs, b);
                         try {
-                            outputStream.write(packet.toByteArray());
+                            synchronized (outputStream) {
+                                outputStream.write(packet.toByteArray());
+                            }
                         } catch (IOException e) {
                             Ln.e("output stream write faild");
                             end();

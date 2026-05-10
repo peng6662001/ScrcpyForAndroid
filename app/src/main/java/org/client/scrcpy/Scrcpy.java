@@ -32,10 +32,16 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 
 public class Scrcpy extends Service {
+    public static final String DISCONNECT_REASON_CONNECT_RETRY_EXHAUSTED = "connect_retry_exhausted";
+    public static final String DISCONNECT_REASON_CONTROL_WRITE_FAILED = "control_write_failed";
+    public static final String DISCONNECT_REASON_PACKET_TOO_LARGE = "packet_too_large";
+    public static final String DISCONNECT_REASON_INVALID_PACKET_SIZE = "invalid_packet_size";
+    public static final String DISCONNECT_REASON_STREAM_READ_FAILED = "stream_read_failed";
 
     public static final String LOCAL_IP = "127.0.0.1";
     // 本地画面转发占用的端口
     public static final int LOCAL_FORWART_PORT = 7008;
+    public static final int LOCAL_AUDIO_FORWARD_PORT = 7009;
 
     public static final int DEFAULT_ADB_PORT = 5555;
     private String serverHost;
@@ -59,6 +65,19 @@ public class Scrcpy extends Service {
 
     private DataInputStream socketInputStream = null;
     private DataOutputStream socketOutputStream = null;
+    private final AtomicBoolean audioConfigured = new AtomicBoolean(false);
+
+    private void notifyDisconnect(String reason, Exception error) {
+        socket_status = false;
+        String detail = reason;
+        if (error != null && !TextUtils.isEmpty(error.getMessage())) {
+            detail = reason + ": " + error.getMessage();
+        }
+        Log.e("Scrcpy", "disconnect: " + detail, error);
+        if (serviceCallbacks != null) {
+            serviceCallbacks.errorDisconnect(reason, detail);
+        }
+    }
 
     @Override
     public IBinder onBind(Intent intent) {
@@ -79,6 +98,7 @@ public class Scrcpy extends Service {
 
 
         updateAvailable.set(true);
+        audioConfigured.set(false);
 
     }
 
@@ -96,6 +116,7 @@ public class Scrcpy extends Service {
         this.screenHeight = screenHeight;
         this.screenWidth = screenWidth;
         this.surface = surface;
+        audioConfigured.set(false);
         Thread thread = new Thread(new Runnable() {
             @Override
             public void run() {
@@ -124,11 +145,14 @@ public class Scrcpy extends Service {
         }
         updateAvailable.set(true);
 
-        try {  // 请求关键帧, 避免花屏
-            requestNewKeyFrame();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+        Thread thread = new Thread(() -> {
+            try {  // 请求关键帧, 避免花屏
+                requestNewKeyFrame();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        });
+        thread.start();
     }
 
     public void StopService() {
@@ -281,8 +305,11 @@ public class Scrcpy extends Service {
 
                 dataOutputStream = new DataOutputStream(socket.getOutputStream());
                 attempts = 0;
-                byte[] buf = new byte[16];
-                dataInputStream.read(buf, 0, 16);
+                // Server sends exactly 2 ints (width/height), i.e. 8 bytes.
+                // Reading 16 bytes here would consume the first 8 bytes of the media stream
+                // and corrupt all subsequent packet boundaries.
+                byte[] buf = new byte[remote_dev_resolution.length * 4];
+                dataInputStream.readFully(buf, 0, buf.length);
                 for (int i = 0; i < remote_dev_resolution.length; i++) {
                     remote_dev_resolution[i] = (((int) (buf[i * 4]) << 24) & 0xFF000000) |
                             (((int) (buf[i * 4 + 1]) << 16) & 0xFF0000) |
@@ -300,19 +327,17 @@ public class Scrcpy extends Service {
                 socketOutputStream = dataOutputStream;
 
                 socket_status = true;
+                audioConfigured.set(false);
+                startAudioConnection(ip, LOCAL_AUDIO_FORWARD_PORT, delay);
 
-                loop(dataInputStream, dataOutputStream, delay);
+                loopVideoAndControl(dataInputStream, dataOutputStream, delay);
 
             } catch (Exception e) {
                 e.printStackTrace();
                 if (LetServceRunning.get()) {
                     attempts--;
                     if (attempts < 0) {
-                        socket_status = false;
-
-                        if (serviceCallbacks != null) {
-                            serviceCallbacks.errorDisconnect();
-                        }
+                        notifyDisconnect(DISCONNECT_REASON_CONNECT_RETRY_EXHAUSTED, e);
                         return;
                     }
                     try {
@@ -367,13 +392,59 @@ public class Scrcpy extends Service {
         return false;
     }
 
-    private void loop(DataInputStream dataInputStream, DataOutputStream dataOutputStream, int delay) throws InterruptedException {
+    private void startAudioConnection(String ip, int port, int delay) {
+        Thread thread = new Thread(() -> {
+            Socket audioSocket = null;
+            DataInputStream audioInputStream = null;
+            int attempts = 30;
+            while (attempts > 0 && LetServceRunning.get() && socket_status) {
+                try {
+                    audioSocket = new Socket();
+                    audioSocket.connect(new InetSocketAddress(ip, port), 5000);
+                    audioInputStream = new DataInputStream(audioSocket.getInputStream());
+                    loopAudio(audioInputStream, delay);
+                    return;
+                } catch (IOException e) {
+                    attempts--;
+                    Log.e("Scrcpy", "audio socket connect/read failed: " + e.getMessage());
+                    if (attempts <= 0 || !LetServceRunning.get() || !socket_status) {
+                        return;
+                    }
+                    try {
+                        Thread.sleep(100);
+                    } catch (InterruptedException ignore) {
+                        return;
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                } finally {
+                    if (audioInputStream != null) {
+                        try {
+                            audioInputStream.close();
+                        } catch (IOException ignore) {
+                        }
+                        audioInputStream = null;
+                    }
+                    if (audioSocket != null) {
+                        try {
+                            audioSocket.close();
+                        } catch (IOException ignore) {
+                        }
+                        audioSocket = null;
+                    }
+                }
+            }
+        }, "scrcpy-audio");
+        thread.start();
+    }
+
+    private void loopVideoAndControl(DataInputStream dataInputStream, DataOutputStream dataOutputStream, int delay) throws InterruptedException {
         VideoPacket.StreamSettings streamSettings = null;
         byte[] packetSize = new byte[4];
 
         // 由于网络传输存在延迟，丢弃数据包计数
         long lastVideoOffset = 0;
-        long lastAudioOffset = 0;
 
         boolean waitKeyFrame = false;
 
@@ -389,9 +460,7 @@ public class Scrcpy extends Service {
                         dataOutputStream.write(data);
                     } catch (IOException e) {
                         e.printStackTrace();
-                        if (serviceCallbacks != null) {
-                            serviceCallbacks.errorDisconnect();
-                        }
+                        notifyDisconnect(DISCONNECT_REASON_CONTROL_WRITE_FAILED, e);
                         LetServceRunning.set(false);
                     } finally {
                         // event = null;
@@ -402,10 +471,14 @@ public class Scrcpy extends Service {
                     waitEvent = false;
                     dataInputStream.readFully(packetSize, 0, 4);
                     int size = ByteUtils.bytesToInt(packetSize);
+                    if (size <= 0) {
+                        notifyDisconnect(DISCONNECT_REASON_INVALID_PACKET_SIZE,
+                                new IllegalStateException("invalid packet size: " + size));
+                        LetServceRunning.set(false);
+                        return;
+                    }
                     if (size > 4 * 1024 * 1024) {  // 如果单个数据包大于 4m ，直接断开连接
-                        if (serviceCallbacks != null) {
-                            serviceCallbacks.errorDisconnect();
-                        }
+                        notifyDisconnect(DISCONNECT_REASON_PACKET_TOO_LARGE, null);
                         LetServceRunning.set(false);
                         return;
                     }
@@ -465,32 +538,63 @@ public class Scrcpy extends Service {
                             }
                         }
                         first_time = false;
-                    } else if (MediaPacket.Type.getType(packet[0]) == MediaPacket.Type.AUDIO) {
-                        AudioPacket audioPacket = AudioPacket.readHead(packet);
-                        // byte[] data = audioPacket.data;
-                        if (audioPacket.flag == AudioPacket.Flag.CONFIG) {
-                            int dataLength = packet.length - audioPacket.headLength();
-                            byte[] data = new byte[dataLength];
-                            System.arraycopy(packet, audioPacket.headLength(), data, 0, dataLength);
-                            audioDecoder.configure(data);
-                        } else if (audioPacket.flag == AudioPacket.Flag.END) {
-                            // need close stream
-                            Log.e("Scrcpy", "Audio END ... ");
-                        } else {
-                            if (lastAudioOffset == 0) {
-                                lastAudioOffset = System.currentTimeMillis() - (audioPacket.presentationTimeStamp / 1000);
-                            }
-                            if (System.currentTimeMillis() - (lastAudioOffset + (audioPacket.presentationTimeStamp / 1000)) < delay) {
-                                audioDecoder.decodeSample(packet, audioPacket.headLength(), packet.length - audioPacket.headLength(),
-                                        0, audioPacket.flag.getFlag());
-                            }
-                        }
+                    } else {
+                        Log.w("Scrcpy", "unexpected packet type on video/control socket: " + packet[0]);
                     }
 
                 }
             } catch (IOException e) {
                 Log.e("Scrcpy", "IOException: " + e.getMessage());
                 e.printStackTrace();
+                notifyDisconnect(DISCONNECT_REASON_STREAM_READ_FAILED, e);
+                LetServceRunning.set(false);
+            } finally {
+                if (waitEvent) {
+                    Thread.sleep(5);
+                }
+            }
+        }
+    }
+
+    private void loopAudio(DataInputStream dataInputStream, int delay) throws IOException, InterruptedException {
+        byte[] packetSize = new byte[4];
+        long lastAudioOffset = 0;
+        while (LetServceRunning.get() && socket_status) {
+            boolean waitEvent = true;
+            try {
+                if (dataInputStream.available() > 0) {
+                    waitEvent = false;
+                    dataInputStream.readFully(packetSize, 0, 4);
+                    int size = ByteUtils.bytesToInt(packetSize);
+                    if (size <= 0 || size > 4 * 1024 * 1024) {
+                        throw new IOException("invalid audio packet size: " + size);
+                    }
+                    byte[] packet = new byte[size];
+                    dataInputStream.readFully(packet, 0, size);
+                    if (MediaPacket.Type.getType(packet[0]) != MediaPacket.Type.AUDIO) {
+                        Log.w("Scrcpy", "unexpected packet type on audio socket: " + packet[0]);
+                        continue;
+                    }
+                    AudioPacket audioPacket = AudioPacket.readHead(packet);
+                    if (audioPacket.flag == AudioPacket.Flag.CONFIG) {
+                        int dataLength = packet.length - audioPacket.headLength();
+                        byte[] data = new byte[dataLength];
+                        System.arraycopy(packet, audioPacket.headLength(), data, 0, dataLength);
+                        audioDecoder.configure(data);
+                        audioConfigured.set(true);
+                    } else if (audioPacket.flag == AudioPacket.Flag.END) {
+                        Log.e("Scrcpy", "Audio END ... ");
+                        return;
+                    } else if (audioConfigured.get()) {
+                        if (lastAudioOffset == 0) {
+                            lastAudioOffset = System.currentTimeMillis() - (audioPacket.presentationTimeStamp / 1000);
+                        }
+                        if (System.currentTimeMillis() - (lastAudioOffset + (audioPacket.presentationTimeStamp / 1000)) < delay) {
+                            audioDecoder.decodeSample(packet, audioPacket.headLength(), packet.length - audioPacket.headLength(),
+                                    0, audioPacket.flag.getFlag());
+                        }
+                    }
+                }
             } finally {
                 if (waitEvent) {
                     Thread.sleep(5);
@@ -502,7 +606,7 @@ public class Scrcpy extends Service {
     public interface ServiceCallbacks {
         void loadNewRotation();
 
-        void errorDisconnect();
+        void errorDisconnect(String reason, String detail);
     }
 
     public class MyServiceBinder extends Binder {

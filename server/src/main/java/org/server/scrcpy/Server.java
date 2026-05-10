@@ -1,5 +1,6 @@
 package org.server.scrcpy;
 
+import org.server.scrcpy.audio.AudioCaptureException;
 import org.server.scrcpy.util.Workarounds;
 
 import java.io.IOException;
@@ -19,6 +20,7 @@ public final class Server {
         try (DroidConnection connection = DroidConnection.open(ip)) {
             ScreenEncoder screenEncoder = new ScreenEncoder(options.getBitRate());
 
+            startAudioStream(options);
             // asynchronous
             startEventController(device, connection, screenEncoder);
 
@@ -32,6 +34,19 @@ public final class Server {
 
             }
         }
+    }
+
+    private static void startAudioStream(Options options) {
+        new Thread(() -> {
+            try (DroidConnection audioConnection = DroidConnection.open(ip, DroidConnection.PORT_AUDIO)) {
+                AudioEncoder audioEncoder = new AudioEncoder(128000);
+                audioEncoder.streamScreen(audioConnection.getOutputStream());
+            } catch (IOException e) {
+                Ln.e("Audio stream stopped", e);
+            } catch (AudioCaptureException e) {
+                Ln.e("Audio capture stopped", e);
+            }
+        }, "scrcpy-audio-server").start();
     }
 
     private static void startEventController(final Device device, final DroidConnection connection, ScreenEncoder screenEncoder) {
@@ -100,4 +115,3 @@ public final class Server {
         scrcpy(options);
     }
 }
-
