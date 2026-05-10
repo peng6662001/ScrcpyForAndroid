@@ -27,6 +27,7 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.LinkedList;
+import java.util.Locale;
 import java.util.Queue;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -66,6 +67,11 @@ public class Scrcpy extends Service {
     private DataInputStream socketInputStream = null;
     private DataOutputStream socketOutputStream = null;
     private final AtomicBoolean audioConfigured = new AtomicBoolean(false);
+    private final AtomicBoolean audioEnabled = new AtomicBoolean(true);
+    private final Object trafficLock = new Object();
+    private long trafficWindowStartMs = System.currentTimeMillis();
+    private long trafficWindowBytes = 0;
+    private long trafficBytesPerSecond = 0;
 
     private void notifyDisconnect(String reason, Exception error) {
         socket_status = false;
@@ -86,6 +92,24 @@ public class Scrcpy extends Service {
 
     public void setServiceCallbacks(ServiceCallbacks callbacks) {
         serviceCallbacks = callbacks;
+    }
+
+    public void setAudioEnabled(boolean enabled) {
+        audioEnabled.set(enabled);
+    }
+
+    public boolean isAudioEnabled() {
+        return audioEnabled.get();
+    }
+
+    public String getTrafficSpeedText() {
+        synchronized (trafficLock) {
+            updateTrafficWindowLocked(System.currentTimeMillis(), 0);
+            if (trafficBytesPerSecond >= 1024 * 1024) {
+                return String.format(Locale.US, "%.2f MB/s", trafficBytesPerSecond / (1024f * 1024f));
+            }
+            return String.format(Locale.US, "%.0f KB/s", trafficBytesPerSecond / 1024f);
+        }
     }
 
     public void setParms(Surface NewSurface, int NewWidth, int NewHeight) {
@@ -264,6 +288,7 @@ public class Scrcpy extends Service {
         videoDecoder.start();
         audioDecoder = new AudioDecoder();
         audioDecoder.start();
+        resetTrafficStats();
 
         DataInputStream dataInputStream = null;
         DataOutputStream dataOutputStream = null;
@@ -380,6 +405,29 @@ public class Scrcpy extends Service {
 
     }
 
+    private void resetTrafficStats() {
+        synchronized (trafficLock) {
+            trafficWindowStartMs = System.currentTimeMillis();
+            trafficWindowBytes = 0;
+            trafficBytesPerSecond = 0;
+        }
+    }
+
+    private void recordTrafficBytes(int size) {
+        synchronized (trafficLock) {
+            updateTrafficWindowLocked(System.currentTimeMillis(), size);
+        }
+    }
+
+    private void updateTrafficWindowLocked(long now, long appendedBytes) {
+        if (now - trafficWindowStartMs >= 1000) {
+            trafficBytesPerSecond = trafficWindowBytes;
+            trafficWindowBytes = 0;
+            trafficWindowStartMs = now;
+        }
+        trafficWindowBytes += appendedBytes;
+    }
+
     /**
      * Request Keyframe
      * 请求关键帧
@@ -470,6 +518,7 @@ public class Scrcpy extends Service {
                 if (dataInputStream.available() > 0) {
                     waitEvent = false;
                     dataInputStream.readFully(packetSize, 0, 4);
+                    recordTrafficBytes(4);
                     int size = ByteUtils.bytesToInt(packetSize);
                     if (size <= 0) {
                         notifyDisconnect(DISCONNECT_REASON_INVALID_PACKET_SIZE,
@@ -484,6 +533,7 @@ public class Scrcpy extends Service {
                     }
                     byte[] packet = new byte[size];
                     dataInputStream.readFully(packet, 0, size);
+                    recordTrafficBytes(size);
                     if (MediaPacket.Type.getType(packet[0]) == MediaPacket.Type.VIDEO) {
                         VideoPacket videoPacket = VideoPacket.readHead(packet);
                         // byte[] data = videoPacket.data;
@@ -565,12 +615,14 @@ public class Scrcpy extends Service {
                 if (dataInputStream.available() > 0) {
                     waitEvent = false;
                     dataInputStream.readFully(packetSize, 0, 4);
+                    recordTrafficBytes(4);
                     int size = ByteUtils.bytesToInt(packetSize);
                     if (size <= 0 || size > 4 * 1024 * 1024) {
                         throw new IOException("invalid audio packet size: " + size);
                     }
                     byte[] packet = new byte[size];
                     dataInputStream.readFully(packet, 0, size);
+                    recordTrafficBytes(size);
                     if (MediaPacket.Type.getType(packet[0]) != MediaPacket.Type.AUDIO) {
                         Log.w("Scrcpy", "unexpected packet type on audio socket: " + packet[0]);
                         continue;
@@ -589,7 +641,8 @@ public class Scrcpy extends Service {
                         if (lastAudioOffset == 0) {
                             lastAudioOffset = System.currentTimeMillis() - (audioPacket.presentationTimeStamp / 1000);
                         }
-                        if (System.currentTimeMillis() - (lastAudioOffset + (audioPacket.presentationTimeStamp / 1000)) < delay) {
+                        if (audioEnabled.get()
+                                && System.currentTimeMillis() - (lastAudioOffset + (audioPacket.presentationTimeStamp / 1000)) < delay) {
                             audioDecoder.decodeSample(packet, audioPacket.headLength(), packet.length - audioPacket.headLength(),
                                     0, audioPacket.flag.getFlag());
                         }

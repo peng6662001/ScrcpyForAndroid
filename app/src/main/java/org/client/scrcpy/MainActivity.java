@@ -10,6 +10,7 @@ import android.content.pm.ActivityInfo;
 import android.content.res.AssetManager;
 import android.content.res.Configuration;
 import android.graphics.Color;
+import android.graphics.PixelFormat;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -23,20 +24,25 @@ import android.text.TextUtils;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.Display;
+import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewConfiguration;
+import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ListPopupWindow;
 import android.widget.Spinner;
 import android.widget.Switch;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import org.client.scrcpy.utils.AdbHelper;
@@ -86,8 +92,25 @@ public class MainActivity extends Activity implements Scrcpy.ServiceCallbacks, S
     private Surface surface;
     private Scrcpy scrcpy;
     private long timestamp = 0;
+    private long lastBackPressedAt = 0;
+    private int quickBackPressCount = 0;
     private String lastDisconnectReason = null;
     private String lastDisconnectDetail = null;
+    private View topControlBar;
+    private View showControlsButton;
+    private FrameLayout controlOverlayHost;
+    private TextView speedTextView;
+    private Switch audioSwitchView;
+    private final Runnable speedRefreshRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!serviceBound || scrcpy == null || speedTextView == null) {
+                return;
+            }
+            speedTextView.setText(scrcpy.getTrafficSpeedText());
+            ThreadUtils.postDelayed(this, 1000);
+        }
+    };
     private final Runnable autoReconnectRunnable = new Runnable() {
         @Override
         public void run() {
@@ -99,7 +122,7 @@ public class MainActivity extends Activity implements Scrcpy.ServiceCallbacks, S
     };
 
     // private byte[] fileBase64;
-    private LinearLayout linearLayout;
+    private ViewGroup linearLayout;
 
     private final ServiceConnection serviceConnection = new ServiceConnection() {
         @Override
@@ -160,6 +183,7 @@ public class MainActivity extends Activity implements Scrcpy.ServiceCallbacks, S
 
     // userDisconnect ：是否为用户手动断开连接
     private void showMainView(boolean userDisconnect) {
+        stopSpeedUpdates();
         if (scrcpy != null) {
             scrcpy.StopService();
         }
@@ -577,7 +601,16 @@ public class MainActivity extends Activity implements Scrcpy.ServiceCallbacks, S
                         | View.SYSTEM_UI_FLAG_FULLSCREEN
                         | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
         surfaceView = findViewById(R.id.decoder_surface);
+        if (surfaceView == null) {
+            int fallbackLayoutResId = getFallbackSurfaceLayoutResId();
+            setContentView(fallbackLayoutResId);
+            surfaceView = findViewById(R.id.decoder_surface);
+        }
+        if (surfaceView == null) {
+            throw new IllegalStateException("decoder_surface not found in connected layout");
+        }
         surface = surfaceView.getHolder().getSurface();
+        initTopControlBar();
         final LinearLayout nav_bar = findViewById(R.id.nav_button_bar);
         if (PreUtils.get(context, Constant.CONTROL_NAV, false) &&
                 !PreUtils.get(context, Constant.CONTROL_NO, false)) {
@@ -586,7 +619,240 @@ public class MainActivity extends Activity implements Scrcpy.ServiceCallbacks, S
             nav_bar.setVisibility(LinearLayout.GONE);
         }
         linearLayout = findViewById(R.id.container1);
+        if (linearLayout == null) {
+            linearLayout = findViewById(R.id.container);
+        }
         start_Scrcpy_service();
+    }
+
+    private int getFallbackSurfaceLayoutResId() {
+        if (PreUtils.get(context, Constant.CONTROL_NAV, false) &&
+                !PreUtils.get(context, Constant.CONTROL_NO, false)) {
+            return R.layout.surface_nav;
+        }
+        return R.layout.surface_no_nav;
+    }
+
+    private void initTopControlBar() {
+        View contentRoot = findViewById(android.R.id.content);
+        if (!(contentRoot instanceof ViewGroup)) {
+            return;
+        }
+        ViewGroup contentGroup = (ViewGroup) contentRoot;
+        if (topControlBar != null && topControlBar.getParent() instanceof ViewGroup) {
+            ((ViewGroup) topControlBar.getParent()).removeView(topControlBar);
+        }
+        if (showControlsButton != null && showControlsButton.getParent() instanceof ViewGroup) {
+            ((ViewGroup) showControlsButton.getParent()).removeView(showControlsButton);
+        }
+
+        FrameLayout overlayHost = new FrameLayout(this);
+        overlayHost.setLayoutParams(new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT));
+        overlayHost.setClickable(false);
+        controlOverlayHost = overlayHost;
+
+        LinearLayout bar = new LinearLayout(this);
+        FrameLayout.LayoutParams barParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP);
+        int padH = dp(12);
+        int padV = dp(8);
+        bar.setLayoutParams(barParams);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setBackgroundColor(0xAA111111);
+        bar.setPadding(padH, padV, padH, padV);
+        bar.setClickable(true);
+
+        TextView speedView = new TextView(this);
+        LinearLayout.LayoutParams speedParams = new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        speedView.setLayoutParams(speedParams);
+        speedView.setText("0 KB/s");
+        speedView.setTextColor(Color.WHITE);
+        speedView.setTextSize(14);
+
+        Switch audioSwitch = new Switch(this);
+        audioSwitch.setText("Audio");
+        audioSwitch.setTextColor(Color.WHITE);
+        audioSwitch.setTextSize(14);
+        audioSwitch.setChecked(true);
+
+        Button hideButton = new Button(this);
+        LinearLayout.LayoutParams hideParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, dp(36));
+        hideParams.leftMargin = dp(8);
+        hideButton.setLayoutParams(hideParams);
+        hideButton.setMinWidth(dp(56));
+        hideButton.setText("隐藏");
+        hideButton.setBackgroundColor(Color.TRANSPARENT);
+        hideButton.setTextColor(Color.WHITE);
+
+        Button closeButton = new Button(this);
+        LinearLayout.LayoutParams closeParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, dp(36));
+        closeParams.leftMargin = dp(8);
+        closeButton.setLayoutParams(closeParams);
+        closeButton.setMinWidth(dp(56));
+        closeButton.setText("关闭");
+        closeButton.setBackgroundColor(Color.TRANSPARENT);
+        closeButton.setTextColor(Color.WHITE);
+
+        Button miniButton = new Button(this);
+        FrameLayout.LayoutParams miniParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, dp(36), Gravity.TOP | Gravity.START);
+        miniParams.topMargin = dp(10);
+        miniParams.leftMargin = dp(12);
+        miniButton.setLayoutParams(miniParams);
+        miniButton.setMinWidth(dp(56));
+        miniButton.setText("展开");
+        miniButton.setTextColor(Color.WHITE);
+        miniButton.setBackgroundColor(0xCC333333);
+        miniButton.setVisibility(View.GONE);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            miniButton.setElevation(dp(12));
+        }
+
+        bar.addView(speedView);
+        bar.addView(audioSwitch);
+        bar.addView(hideButton);
+        bar.addView(closeButton);
+        overlayHost.addView(bar);
+        overlayHost.addView(miniButton);
+        contentGroup.addView(overlayHost);
+
+        topControlBar = bar;
+        showControlsButton = miniButton;
+        speedTextView = speedView;
+        audioSwitchView = audioSwitch;
+        topControlBar.setVisibility(View.GONE);
+        showControlsButton.setVisibility(View.GONE);
+        showControlsButton.bringToFront();
+
+        showControlsButton.setOnClickListener(v -> setTopControlsVisible(true));
+        showControlsButton.setOnTouchListener(new View.OnTouchListener() {
+            private float downRawX;
+            private float downRawY;
+            private int downLeft;
+            private int downTop;
+            private boolean moved;
+
+            @Override
+            public boolean onTouch(View v, MotionEvent event) {
+                FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) v.getLayoutParams();
+                switch (event.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        downRawX = event.getRawX();
+                        downRawY = event.getRawY();
+                        downLeft = params.leftMargin;
+                        downTop = params.topMargin;
+                        moved = false;
+                        return true;
+                    case MotionEvent.ACTION_MOVE:
+                        int targetLeft = downLeft + (int) (event.getRawX() - downRawX);
+                        int targetTop = downTop + (int) (event.getRawY() - downRawY);
+                        int maxLeft = Math.max(0, overlayHost.getWidth() - v.getWidth());
+                        int maxTop = Math.max(0, overlayHost.getHeight() - v.getHeight());
+                        params.leftMargin = Math.max(0, Math.min(targetLeft, maxLeft));
+                        params.topMargin = Math.max(0, Math.min(targetTop, maxTop));
+                        v.setLayoutParams(params);
+                        moved = moved || Math.abs(event.getRawX() - downRawX) > dp(4)
+                                || Math.abs(event.getRawY() - downRawY) > dp(4);
+                        return true;
+                    case MotionEvent.ACTION_UP:
+                        if (!moved) {
+                            v.performClick();
+                        }
+                        return true;
+                    default:
+                        return false;
+                }
+            }
+        });
+        hideButton.setOnClickListener(v -> setTopControlsVisible(false));
+        closeButton.setOnClickListener(v -> {
+            showMainView(true);
+            first_time = true;
+        });
+        audioSwitchView.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            if (scrcpy != null) {
+                scrcpy.setAudioEnabled(isChecked);
+            }
+        });
+        miniButton.post(() -> {
+            resetMiniButtonPosition();
+        });
+    }
+
+    private void setTopControlsVisible(boolean visible) {
+        if (topControlBar != null) {
+            topControlBar.setVisibility(visible ? View.VISIBLE : View.GONE);
+        }
+        if (showControlsButton != null) {
+            if (!visible) {
+                showControlsButton.post(() -> {
+                    resetMiniButtonPosition();
+                    ensureMiniButtonVisible();
+                    showControlsButton.bringToFront();
+                    showControlsButton.setVisibility(View.VISIBLE);
+                    if (controlOverlayHost != null) {
+                        controlOverlayHost.bringToFront();
+                    }
+                });
+            } else {
+                showControlsButton.setVisibility(View.GONE);
+            }
+        }
+    }
+
+    private void startSpeedUpdates() {
+        stopSpeedUpdates();
+        if (scrcpy != null && audioSwitchView != null) {
+            audioSwitchView.setChecked(scrcpy.isAudioEnabled());
+        }
+        if (speedTextView != null) {
+            speedTextView.setText("0 KB/s");
+        }
+        ThreadUtils.post(speedRefreshRunnable);
+    }
+
+    private void stopSpeedUpdates() {
+        ThreadUtils.removeCallbacks(speedRefreshRunnable);
+    }
+
+    private int dp(int value) {
+        return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    private void resetMiniButtonPosition() {
+        if (showControlsButton == null || controlOverlayHost == null) {
+            return;
+        }
+        FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) showControlsButton.getLayoutParams();
+        if (showControlsButton.getWidth() == 0 || controlOverlayHost.getWidth() == 0) {
+            showControlsButton.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+        }
+        int buttonWidth = Math.max(showControlsButton.getMeasuredWidth(), showControlsButton.getWidth());
+        params.leftMargin = Math.max(0, controlOverlayHost.getWidth() - buttonWidth - dp(32));
+        params.topMargin = dp(10);
+        showControlsButton.setLayoutParams(params);
+    }
+
+    private void ensureMiniButtonVisible() {
+        if (showControlsButton == null || controlOverlayHost == null) {
+            return;
+        }
+        FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) showControlsButton.getLayoutParams();
+        int maxLeft = Math.max(0, controlOverlayHost.getWidth() - showControlsButton.getWidth());
+        int maxTop = Math.max(0, controlOverlayHost.getHeight() - showControlsButton.getHeight());
+        if (params.leftMargin < 0 || params.leftMargin > maxLeft || params.topMargin < 0 || params.topMargin > maxTop) {
+            resetMiniButtonPosition();
+            return;
+        }
+        showControlsButton.setLayoutParams(params);
     }
 
 
@@ -779,26 +1045,33 @@ public class MainActivity extends Activity implements Scrcpy.ServiceCallbacks, S
 
     @Override
     public void onBackPressed() {
-        if (timestamp == 0) {
-            if (serviceBound) {
-                timestamp = SystemClock.uptimeMillis();
-                Toast.makeText(context, "Press again to exit", Toast.LENGTH_SHORT).show();
-            } else {
-                finish();
-            }
-        } else {
-            long now = SystemClock.uptimeMillis();
-            if (now < timestamp + 1000) {
-                timestamp = 0;
-                if (serviceBound) {
-                    showMainView(true);
-                    first_time = true;
-                } else {
-                    finish();
-                }
-            }
+        if (serviceBound) {
             timestamp = 0;
+            return;
         }
+        finish();
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (serviceBound && event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
+            if (event.getAction() == KeyEvent.ACTION_UP && scrcpy != null) {
+                long now = SystemClock.uptimeMillis();
+                if (now - lastBackPressedAt < 1000) {
+                    quickBackPressCount++;
+                } else {
+                    quickBackPressCount = 1;
+                }
+                lastBackPressedAt = now;
+                if (quickBackPressCount >= 2) {
+                    Toast.makeText(context, "请点击关闭键", Toast.LENGTH_SHORT).show();
+                    quickBackPressCount = 0;
+                }
+                scrcpy.sendKeyevent(KeyEvent.KEYCODE_BACK);
+            }
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
     }
 
     @Override
@@ -871,6 +1144,8 @@ public class MainActivity extends Activity implements Scrcpy.ServiceCallbacks, S
     protected void connectSuccessExt() {
         resetAutoReconnectState();
         Dialog.closeDialogs();
+        setTopControlsVisible(true);
+        startSpeedUpdates();
     }
 
     protected void connectExitExt() {
@@ -881,6 +1156,7 @@ public class MainActivity extends Activity implements Scrcpy.ServiceCallbacks, S
      * 连接失败的额外处理
      */
     protected void connectExitExt(boolean userDisconnect) {
+        stopSpeedUpdates();
         if (!userDisconnect) {  // userDisconnect : 用户主动断开连接
             // 如果自动断开了端口连接，在系统恢复时，重启adb，避免
             // 警告！！！ 重启将会导致 adb 配对过程失效，从而无法连接新设备，需要更智能的重启机制

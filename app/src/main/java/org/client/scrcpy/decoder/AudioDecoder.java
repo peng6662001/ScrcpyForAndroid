@@ -151,7 +151,9 @@ public class AudioDecoder {
                                 byte[] data = new byte[info.size];
                                 outputBuffer.get(data);
                                 outputBuffer.clear();
-                                audioTrack.write(data, 0, info.size);
+                                if (audioTrack != null) {
+                                    audioTrack.write(data, 0, info.size);
+                                }
                             }
                             // release
                             mCodec.releaseOutputBuffer(index, true);
